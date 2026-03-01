@@ -1,0 +1,49 @@
+---
+title: Retry & cancellation
+description: Retry failed jobs and cancel queued or running jobs.
+---
+
+# Retry & cancellation
+
+## Retry
+
+Set `retryCount` and optionally `retryDelay` (number in ms or a function `(attempt, error) => ms`):
+
+```javascript
+const limiter = new RateLimiter({
+  retryCount: 3,
+  retryDelay: (attempt) => Math.pow(2, attempt) * 1000,  // 2s, 4s, 8s
+});
+
+await limiter.schedule(() => callFlakyApi());
+```
+
+On failure the job is re-queued and run again after the delay, up to `retryCount` times.
+
+## Cancel by job ID
+
+Give the job an `id` and cancel it if it’s still queued:
+
+```javascript
+limiter.schedule({ id: 'my-job' }, () => longRunningTask());
+limiter.cancel('my-job');  // removes it from the queue if not yet started
+```
+
+## Cancel with AbortController
+
+Pass a `signal` so the job can be aborted from outside:
+
+```javascript
+const controller = new AbortController();
+
+limiter.schedule(
+  { signal: controller.signal },
+  async () => { /* ... */ }
+);
+
+controller.abort();  // job is aborted when it next checks the signal
+```
+
+The job should respect `signal.aborted` or use the signal in fetch/other APIs that support it.
+
+Next: [When to use Redis](/redis/intro).

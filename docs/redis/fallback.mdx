@@ -1,0 +1,32 @@
+---
+title: When Redis is down
+description: Handle connection failures and fall back to in-memory limiting.
+---
+
+# When Redis is down
+
+**At startup:** `ready()` waits for a connection (default 5s). If Redis is unreachable, `ready()` rejects. Catch that and fall back to an in-memory limiter so your app still runs:
+
+```javascript
+import { RateLimiter, DistributedRateLimiter } from '@taukirsheikh/rate-limiter';
+
+let limiter;
+
+try {
+  limiter = new DistributedRateLimiter({
+    id: 'api-limiter',
+    redis: { url: process.env.REDIS_URL || 'redis://localhost:6379' },
+  });
+  await limiter.ready();
+} catch (err) {
+  console.warn('Redis unavailable, using local limiter', err);
+  limiter = new RateLimiter({ maxConcurrent: 5, minTime: 100 });
+}
+
+// Same API: limiter.schedule(...)
+const result = await limiter.schedule(() => fetch('/api/data'));
+```
+
+**After connection:** If Redis goes away later, Redis commands will reject and the limiter emits `error`. In-flight jobs may reject; queued jobs wait. ioredis auto-reconnects, so short outages can recover without extra code.
+
+Next: [API overview](/reference/api).

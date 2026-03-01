@@ -1,0 +1,40 @@
+---
+title: Priority & wrapping
+description: Run important jobs first and wrap existing functions.
+---
+
+# Priority & wrapping
+
+## Priority
+
+Jobs with a **lower** priority number run first. Use the `Priority` enum or any number.
+
+```javascript
+import { RateLimiter, Priority } from '@taukirsheikh/rate-limiter';
+
+const limiter = new RateLimiter({ maxConcurrent: 1 });
+
+limiter.schedule({ priority: Priority.LOW }, () => backgroundSync());
+limiter.schedule({ priority: Priority.CRITICAL }, () => handleUrgentRequest());
+// Critical runs before low when a slot is free.
+```
+
+`Priority` values: `CRITICAL = 0`, `HIGH = 3`, `NORMAL = 5`, `LOW = 7`, `IDLE = 9`.
+
+## Wrapping a function
+
+Turn any async function into a rate-limited version:
+
+```javascript
+const limitedFetch = limiter.wrap(async (url) => {
+  const res = await fetch(url);
+  return res.json();
+});
+
+// Same as calling limiter.schedule(() => fetch(url).then(r => r.json()))
+const data = await limitedFetch('https://api.example.com/users');
+```
+
+You can pass options as the first argument: `limiter.wrap({ priority: Priority.HIGH }, fn)`.
+
+Next: [Retry & cancellation](/usage/retry-cancel).

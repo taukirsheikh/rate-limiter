@@ -1,0 +1,68 @@
+---
+title: API overview
+description: Main methods and options at a glance.
+---
+
+# API overview
+
+## RateLimiter
+
+**Create:** `new RateLimiter(options)`
+
+**Common options:** `maxConcurrent`, `minTime`, `maxPerInterval`, `interval`, `reservoir`, `reservoirRefreshInterval`, `reservoirRefreshAmount`, `retryCount`, `retryDelay`, `timeout`, `highWater`, `strategy` ('leak' | 'overflow' | 'block').
+
+**Methods**
+
+| Method | Description |
+|--------|-------------|
+| `schedule(fn)` / `schedule(options, fn)` | Run a job; returns Promise of result |
+| `wrap(fn, options?)` | Return a rate-limited version of the function |
+| `pause()` / `resume()` | Pause or resume processing the queue |
+| `stop()` | Stop and reject all queued jobs; returns Promise that resolves when in-flight jobs finish |
+| `cancel(jobId)` | Remove a queued job by id |
+| `waitForIdle()` | Promise that resolves when queue is empty and nothing is running |
+| `getState()` | `{ running, queued, done, failed, reservoir }` |
+| `getStats()` | State plus `avgWaitTime`, `avgExecutionTime` |
+| `getQueued()` | Snapshot of queued jobs |
+| `updateReservoir(value)` / `incrementReservoir(amount)` | Change reservoir |
+| `isIdle()` | True if nothing queued and nothing running |
+
+**Events:** `queued`, `executing`, `done`, `failed`, `retry`, `dropped`, `depleted`, `idle`, `error`.
+
+---
+
+## DistributedRateLimiter
+
+Same options as RateLimiter, plus:
+
+**Required:** `redis` — `{ url }` or `{ host, port }` or `{ client }`, and optional `keyPrefix`, `password`, `db`, etc.
+
+**Extra options:** `pollInterval` (default 50), `heartbeatInterval` (default 30000), `clearOnStart` (default false, useful in tests).
+
+**Methods:** Same as RateLimiter, plus:
+
+| Method | Description |
+|--------|-------------|
+| `ready()` | **Call before use.** Promise that resolves when connected to Redis |
+| `waitForIdle()` | Promise that resolves when local queue is empty and Redis running count is 0 |
+| `getStorage()` | Underlying Redis storage (for advanced use) |
+| `clear()` | Clear all state for this limiter in Redis |
+
+`getState()` and `getStats()` are async and read from Redis.
+
+---
+
+## Job options
+
+When calling `schedule(options, fn)` or `wrap(options, fn)`:
+
+| Option | Description |
+|--------|-------------|
+| `priority` | Lower number = higher priority (default 5) |
+| `weight` | Slots used (default 1) |
+| `id` | Unique id for cancellation |
+| `timeout` | Job timeout in ms |
+| `retryCount` | Override limiter retry count for this job |
+| `signal` | AbortSignal for cancellation |
+
+**Priority enum:** `Priority.CRITICAL` (0), `HIGH` (3), `NORMAL` (5), `LOW` (7), `IDLE` (9).

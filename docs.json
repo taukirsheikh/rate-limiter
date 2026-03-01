@@ -1,0 +1,41 @@
+{
+  "$schema": "https://docs.page/schema.json",
+  "name": "@taukirsheikh/rate-limiter",
+  "description": "Rate limit and queue async work in Node.js. In-memory or Redis-backed for multiple servers.",
+  "anchors": [
+    { "title": "GitHub", "icon": "github", "href": "https://github.com/taukirsheikh/rate-limiter" },
+    { "title": "npm", "icon": "npm", "href": "https://www.npmjs.com/package/@taukirsheikh/rate-limiter" }
+  ],
+  "sidebar": [
+    {
+      "group": "Getting started",
+      "pages": [
+        { "title": "Introduction", "href": "/" },
+        { "title": "Installation", "href": "/installation" },
+        { "title": "Quick start", "href": "/quick-start" }
+      ]
+    },
+    {
+      "group": "Usage",
+      "pages": [
+        { "title": "Concurrency & rate limits", "href": "/usage/concurrency" },
+        { "title": "Priority & wrapping", "href": "/usage/priority" },
+        { "title": "Retry & cancellation", "href": "/usage/retry-cancel" }
+      ]
+    },
+    {
+      "group": "Redis (distributed)",
+      "pages": [
+        { "title": "When to use Redis", "href": "/redis/intro" },
+        { "title": "Setup & connection", "href": "/redis/setup" },
+        { "title": "When Redis is down", "href": "/redis/fallback" }
+      ]
+    },
+    {
+      "group": "Reference",
+      "pages": [
+        { "title": "API overview", "href": "/reference/api" }
+      ]
+    }
+  ]
+}

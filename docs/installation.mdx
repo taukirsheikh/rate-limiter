@@ -1,0 +1,20 @@
+---
+title: Installation
+description: Install the rate limiter package.
+---
+
+# Installation
+
+Install the package:
+
+```bash
+npm install @taukirsheikh/rate-limiter
+```
+
+**Node version:** 18 or newer.
+
+**Redis (optional):** Only needed if you use `DistributedRateLimiter`. The package uses [ioredis](https://github.com/redis/ioredis) as a peer dependency, so you can use your existing Redis client or let the limiter create one.
+
+If you use the in-memory `RateLimiter` only, you don’t need Redis.
+
+Next: [Quick start](/quick-start).

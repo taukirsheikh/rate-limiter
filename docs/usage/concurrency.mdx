@@ -1,0 +1,57 @@
+---
+title: Concurrency & rate limits
+description: Limit how many jobs run at once and how often they start.
+---
+
+# Concurrency & rate limits
+
+## Max concurrent jobs
+
+`maxConcurrent` caps how many jobs run at the same time (default: no limit).
+
+```javascript
+const limiter = new RateLimiter({ maxConcurrent: 3 });
+
+// Up to 3 of these run at once; the rest wait.
+for (let i = 0; i < 10; i++) {
+  limiter.schedule(() => doWork(i));
+}
+```
+
+## Minimum time between jobs
+
+`minTime` is the minimum gap (in ms) between **starting** each job.
+
+```javascript
+const limiter = new RateLimiter({
+  maxConcurrent: 1,
+  minTime: 200,   // start at most one job every 200ms
+});
+```
+
+## Max per interval
+
+To cap jobs per time window (e.g. 60 per minute):
+
+```javascript
+const limiter = new RateLimiter({
+  maxPerInterval: 60,
+  interval: 60_000,   // 1 minute
+});
+```
+
+## Reservoir (token bucket)
+
+A reservoir is a fixed pool of “tokens”. Each job consumes one; when the pool is empty, jobs wait until you refill.
+
+```javascript
+const limiter = new RateLimiter({
+  reservoir: 10,
+  reservoirRefreshInterval: 60_000,  // refill every minute
+  reservoirRefreshAmount: 10,
+});
+```
+
+You can also set or add tokens yourself with `updateReservoir(value)` and `incrementReservoir(amount)`.
+
+Next: [Priority & wrapping](/usage/priority).

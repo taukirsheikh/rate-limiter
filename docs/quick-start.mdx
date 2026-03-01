@@ -1,0 +1,35 @@
+---
+title: Quick start
+description: Your first rate limiter in a few lines.
+---
+
+# Quick start
+
+Create a limiter and run a job through it:
+
+```javascript
+import { RateLimiter } from '@taukirsheikh/rate-limiter';
+
+const limiter = new RateLimiter({
+  maxConcurrent: 2,   // only 2 jobs at a time
+  minTime: 500,       // 500ms between starting each job
+});
+
+const result = await limiter.schedule(() => fetch('https://api.example.com/data'));
+```
+
+`schedule` returns a Promise that resolves when the job finishes. While it runs, other jobs you schedule wait in a queue and start when a slot is free and the rate limit allows.
+
+**Multiple jobs:**
+
+```javascript
+const [a, b, c] = await Promise.all([
+  limiter.schedule(() => fetch('/api/1')),
+  limiter.schedule(() => fetch('/api/2')),
+  limiter.schedule(() => fetch('/api/3')),
+]);
+```
+
+Only 2 run at once; the third starts after one of the first two completes and 500ms has passed.
+
+Next: [Concurrency & rate limits](/usage/concurrency).

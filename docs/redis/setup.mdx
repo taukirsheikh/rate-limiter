@@ -1,0 +1,67 @@
+---
+title: Setup & connection
+description: Configure Redis and connect with a URL or host/port.
+---
+
+# Setup & connection
+
+Create a distributed limiter with Redis options. You **must** call `await limiter.ready()` before using it so the connection is established.
+
+## Using a URL
+
+Handy with env vars (e.g. `REDIS_URL=redis://localhost:6379`):
+
+```javascript
+import { DistributedRateLimiter } from '@taukirsheikh/rate-limiter';
+
+const limiter = new DistributedRateLimiter({
+  id: 'api-limiter',   // same ID on every server = shared limit
+  maxConcurrent: 10,
+  redis: {
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    keyPrefix: 'myapp:ratelimit',
+  },
+});
+
+await limiter.ready();
+
+const result = await limiter.schedule(() => fetch('https://api.example.com/data'));
+```
+
+Supported URL forms: `redis://host:port`, `rediss://...` (TLS), and with auth: `redis://:password@host:6379`.
+
+## Using host and port
+
+```javascript
+const limiter = new DistributedRateLimiter({
+  id: 'api-limiter',
+  maxConcurrent: 10,
+  redis: {
+    host: 'localhost',
+    port: 6379,
+    password: 'optional',
+    keyPrefix: 'myapp:ratelimit',
+  },
+});
+await limiter.ready();
+```
+
+## Using an existing Redis client
+
+If you already use ioredis, pass it in so the limiter doesn’t create a second connection:
+
+```javascript
+import Redis from 'ioredis';
+import { DistributedRateLimiter } from '@taukirsheikh/rate-limiter';
+
+const redis = new Redis(process.env.REDIS_URL);
+
+const limiter = new DistributedRateLimiter({
+  id: 'api-limiter',
+  maxConcurrent: 10,
+  redis: { client: redis },
+});
+await limiter.ready();
+```
+
+Next: [When Redis is down](/redis/fallback).
