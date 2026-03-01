@@ -228,6 +228,29 @@ const result = await limiter.schedule(async () => {
 });
 ```
 
+### Using a Redis URL
+
+You can pass a connection URL instead of host/port:
+
+```typescript
+import { DistributedRateLimiter } from '@taukirsheikh/rate-limiter';
+
+// With a URL string (e.g. redis://localhost:6379)
+const limiter = new DistributedRateLimiter({
+  id: 'api-limiter',
+  maxConcurrent: 10,
+  minTime: 100,
+  redis: {
+    url: 'redis://localhost:6379',
+    keyPrefix: 'myapp:ratelimit',
+  },
+});
+
+await limiter.ready();
+```
+
+Supported URL forms: `redis://localhost:6379`, `rediss://...` (TLS), and URLs with auth (e.g. `redis://:password@host:6379`).
+
 ### Redis Configuration
 
 ```typescript
@@ -360,20 +383,31 @@ console.log({
 });
 ```
 
+### When Redis is unavailable
+
+- **At startup**: `ready()` waits for a connection (default timeout 5 seconds). If Redis is unreachable, `ready()` **rejects** with the connection error or `"Redis connection timeout"`. You must call `await limiter.ready()` before using the limiter; catch this error to handle startup failure.
+- **After connection**: If Redis goes away later, Redis commands (e.g. acquire/release slot) will **reject**. The limiter emits an `'error'` event for these. Queued jobs may stay queued until Redis is back; in-flight jobs will see their promise reject when a Redis call fails. The underlying client (ioredis) auto-reconnects by default, so transient failures may recover.
+- **Recommended**: Use the graceful degradation pattern below so your app can fall back to a local limiter when Redis is not available.
+
 ### Graceful Degradation
 
 ```typescript
+import { RateLimiter, DistributedRateLimiter } from '@taukirsheikh/rate-limiter';
+
+let limiter: RateLimiter | DistributedRateLimiter;
+
 try {
-  const limiter = new DistributedRateLimiter({
+  limiter = new DistributedRateLimiter({
     id: 'api-limiter',
-    redis: { host: 'redis.example.com' },
+    redis: { url: process.env.REDIS_URL ?? 'redis://localhost:6379' },
   });
   await limiter.ready();
 } catch (error) {
-  console.log('Redis unavailable, falling back to local limiter');
-  // Fall back to non-distributed RateLimiter
-  const limiter = new RateLimiter({ maxConcurrent: 5 });
+  console.warn('Redis unavailable, falling back to local limiter', error);
+  limiter = new RateLimiter({ maxConcurrent: 5, minTime: 100 });
 }
+
+// Use limiter.schedule(...) for both
 ```
 
 ---
