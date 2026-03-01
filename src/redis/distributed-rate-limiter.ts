@@ -361,8 +361,12 @@ export class DistributedRateLimiter extends TypedEventEmitter {
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
 
-      // Release slot in Redis
-      await this.storage.releaseSlot(this.id, job.id, job.weight, false);
+      // Release slot in Redis (best-effort; don't leave job promise hanging if Redis fails)
+      try {
+        await this.storage.releaseSlot(this.id, job.id, job.weight, false);
+      } catch (releaseErr) {
+        this.emit('error', releaseErr instanceof Error ? releaseErr : new Error(String(releaseErr)));
+      }
 
       // Check for retry
       if (job.retryAttempt < job.retryCount) {
@@ -441,6 +445,20 @@ export class DistributedRateLimiter extends TypedEventEmitter {
   }
 
   /**
+   * Wait for all jobs to complete (local queue empty and no jobs running in Redis).
+   */
+  async waitForIdle(): Promise<void> {
+    await this.initPromise;
+    while (true) {
+      const state = await this.storage.getState(this.id);
+      if (this.localQueue.isEmpty && state.running === 0) {
+        return;
+      }
+      await sleep(this.pollInterval);
+    }
+  }
+
+  /**
    * Get current state (from Redis)
    */
   async getState(): Promise<LimiterState> {
@@ -470,10 +488,17 @@ export class DistributedRateLimiter extends TypedEventEmitter {
   }
 
   /**
-   * Check if idle (local queue empty)
+   * Check if idle (local queue empty; does not check Redis running count).
    */
   isIdle(): boolean {
     return this.localQueue.isEmpty;
+  }
+
+  /**
+   * Get queued jobs (local queue snapshot).
+   */
+  getQueued(): readonly Job[] {
+    return this.localQueue.toArray();
   }
 
   /**

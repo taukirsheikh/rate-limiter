@@ -393,6 +393,12 @@ export class RedisStorage {
   async waitForConnection(timeout = 5000): Promise<void> {
     if (this.isConnected()) return;
 
+    // If client is already in a terminal failure state, reject immediately
+    const status = this.client.status;
+    if (status === 'end' || status === 'close') {
+      return Promise.reject(new Error(`Redis connection already closed (status: ${status})`));
+    }
+
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         reject(new Error('Redis connection timeout'));

@@ -1,5 +1,5 @@
 /**
- * @custom/rate-limiter
+ * @taukirsheikh/rate-limiter
  *
  * A powerful rate limiter with:
  * - Concurrency control
@@ -14,7 +14,7 @@
  *
  * @example
  * ```ts
- * import { RateLimiter, Priority } from '@custom/rate-limiter';
+ * import { RateLimiter, Priority } from '@taukirsheikh/rate-limiter';
  *
  * const limiter = new RateLimiter({
  *   maxConcurrent: 5,
@@ -28,7 +28,7 @@
  *
  * @example Distributed with Redis
  * ```ts
- * import { DistributedRateLimiter } from '@custom/rate-limiter';
+ * import { DistributedRateLimiter } from '@taukirsheikh/rate-limiter';
  *
  * const limiter = new DistributedRateLimiter({
  *   maxConcurrent: 10,
