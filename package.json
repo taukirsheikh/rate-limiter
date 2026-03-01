@@ -1,0 +1,50 @@
+{
+  "name": "@custom/rate-limiter",
+  "version": "1.1.0",
+  "description": "A powerful rate limiter with concurrency control, priority queues, task scheduling, and Redis clustering support",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "npx tsx src/__tests__/rate-limiter.test.ts",
+    "test:redis": "npx tsx src/__tests__/redis-limiter.test.ts",
+    "example": "npx tsx examples/basic-usage.ts",
+    "example:redis": "npx tsx examples/redis-usage.ts"
+  },
+  "keywords": [
+    "rate-limiter",
+    "throttle",
+    "concurrency",
+    "queue",
+    "scheduler",
+    "bottleneck",
+    "redis",
+    "distributed",
+    "clustering"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "ioredis": "^5.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.6.0",
+    "typescript": "^5.3.0"
+  },
+  "peerDependencies": {
+    "ioredis": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist"
+  ]
+}
+
