@@ -10,6 +10,8 @@ Control how many tasks run at once and how fast they start. Use it when you're c
 npm install rate-queue
 ```
 
+**Docs** — Full guides and API reference: **[docs.page/taukirsheikh/rate-queue](https://docs.page/taukirsheikh/rate-queue)**
+
 **Production (multiple instances) — use Redis**
 
 ```javascript
@@ -84,10 +86,6 @@ const user2 = await limitedFetchUser(2);
 - Wrap any async function with `limiter.wrap(fn)`.
 - Retry failed jobs with `retryCount` and `retryDelay`.
 - Cancel with `limiter.cancel(jobId)` or an `AbortSignal`.
-
-**Docs**
-
-Full guides and API reference: **[docs.page/taukirsheikh/rate-queue](https://docs.page/taukirsheikh/rate-queue)**
 
 **Try the examples**
 
