@@ -7,7 +7,7 @@ description: Run important jobs first and wrap existing functions.
 
 ## Priority
 
-Jobs with a **lower** priority number run first. Use the `Priority` enum or any number.
+**Higher-priority** jobs run first. Lower number = higher priority (e.g. `Priority.CRITICAL` = 0 runs before `Priority.NORMAL` = 5). Use the `Priority` enum or any number.
 
 ```javascript
 import { RateLimiter, Priority } from 'rate-queue';
