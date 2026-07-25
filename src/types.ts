@@ -36,6 +36,11 @@ export interface RateLimiterOptions {
 
   /**
    * How often to refill the reservoir (in milliseconds)
+   *
+   * In the DistributedRateLimiter the refresh happens lazily inside the
+   * atomic acquire script (single writer across all processes), so a fully
+   * idle system does not refresh — the reservoir is refilled the moment the
+   * next job tries to acquire, which is the only time it matters.
    * @default null (no automatic refill)
    */
   reservoirRefreshInterval?: number | null;
@@ -154,6 +159,8 @@ export interface Job<T = unknown> {
   signal?: AbortSignal;
   queuedAt: number;
   startedAt?: number;
+  /** Insertion-order stamp set by PriorityQueue (FIFO tie-break within same ms) */
+  seq?: number;
 }
 
 /**
@@ -187,6 +194,8 @@ export type RateLimiterEvents = {
   idle: void;
   /** Emitted when the limiter is depleted (reservoir empty) */
   depleted: void;
+  /** Emitted when stale jobs from dead processes are reaped (count reclaimed; distributed limiter only) */
+  reaped: number;
   /** Emitted on any error */
   error: Error;
 };

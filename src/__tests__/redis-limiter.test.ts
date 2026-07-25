@@ -252,6 +252,9 @@ async function testReservoir() {
       executed++;
       return 3;
     });
+    // Blocked by the empty reservoir; stop() below rejects it — swallow so
+    // the expected rejection doesn't crash the process
+    job3Promise.catch(() => {});
 
     // Wait for first two
     await Promise.all([job1, job2]);
@@ -287,6 +290,7 @@ async function testReservoir() {
     const blocked = limiter1.schedule(async () => {
       executed++;
     });
+    blocked.catch(() => {}); // rejected by stop() below — expected
 
     await sleep(200);
     assertEqual(executed, 2, 'Only 2 jobs should execute');
@@ -326,11 +330,16 @@ async function testPriority() {
 
     const order: string[] = [];
 
-    // First job blocks
+    // First job blocks; wait until it is actually running before queueing
+    // the others, so they contend on priority rather than racing the start
+    let firstStarted!: () => void;
+    const firstStartedP = new Promise<void>((r) => (firstStarted = r));
     const first = limiter.schedule({ id: 'first' }, async () => {
+      firstStarted();
       await sleep(50);
       order.push('first');
     });
+    await firstStartedP;
 
     // Queue with priorities
     const low = limiter.schedule({ id: 'low', priority: Priority.LOW }, async () => {
@@ -455,6 +464,212 @@ async function testCancellation() {
   });
 }
 
+async function testStaleJobReaping() {
+  console.log('\n💀 Stale Job Reaping Tests');
+
+  await test('reaps slots held by dead processes', async () => {
+    const limiter = createLimiter({
+      maxConcurrent: 2,
+      heartbeatInterval: 100,
+      staleJobTimeout: 250,
+    });
+    await limiter.ready();
+
+    let reapedCount = 0;
+    limiter.on('reaped', (count) => {
+      reapedCount += count;
+    });
+
+    // Simulate a crashed process: acquire a slot directly and never release it
+    const storage = limiter.getStorage();
+    const result = await storage.acquireSlot(limiter.id, {
+      maxConcurrent: 2,
+      minTime: 0,
+      maxPerInterval: 999999,
+      interval: 1000,
+      weight: 2,
+      jobId: 'dead-job',
+    });
+    assert(result.allowed, 'Dead job should have acquired a slot');
+
+    const before = await storage.getState(limiter.id);
+    assertEqual(before.running, 1, `Expected running=1 before reap, got ${before.running}`);
+    assertEqual(before.currentWeight, 2, `Expected currentWeight=2 before reap, got ${before.currentWeight}`);
+
+    // Wait past staleJobTimeout plus at least one heartbeat tick
+    await sleep(600);
+
+    const after = await storage.getState(limiter.id);
+    assertEqual(after.running, 0, `Expected running reclaimed to 0, got ${after.running}`);
+    assertEqual(after.currentWeight, 0, `Expected currentWeight reclaimed to 0, got ${after.currentWeight}`);
+    assertEqual(reapedCount, 1, `Expected reaped event with count 1, got ${reapedCount}`);
+
+    await limiter.stop();
+  });
+
+  await test('does not reap healthy running jobs', async () => {
+    const limiter = createLimiter({
+      maxConcurrent: 1,
+      heartbeatInterval: 50,
+      staleJobTimeout: 10000,
+    });
+    await limiter.ready();
+
+    let reaped = 0;
+    limiter.on('reaped', (count) => {
+      reaped += count;
+    });
+
+    await limiter.schedule(async () => {
+      await sleep(200);
+    });
+
+    assertEqual(reaped, 0, `Healthy job was reaped ${reaped} times`);
+
+    await limiter.stop();
+  });
+}
+
+async function testLazyReservoirRefresh() {
+  console.log('\n🔄 Lazy Reservoir Refresh Tests');
+
+  await test('first acquire honors the configured initial reservoir', async () => {
+    // reservoir !== reservoirRefreshAmount on purpose: with equal values the
+    // init-clobber bug (lastReservoirRefresh seeded to 0 making the first
+    // acquire refresh instantly) is invisible
+    const limiter = createLimiter({
+      reservoir: 1,
+      reservoirRefreshInterval: 60000,
+      reservoirRefreshAmount: 5,
+    });
+    await limiter.ready();
+
+    await limiter.schedule(async () => 1);
+
+    const state = await limiter.getState();
+    // Broken behavior: first acquire lazily "refreshes" to refreshAmount(5)
+    // before decrementing, leaving 4 instead of 0
+    assertEqual(
+      state.reservoir,
+      0,
+      `Expected initial reservoir(1) - 1 acquire = 0, got ${state.reservoir} (init clobbered by refreshAmount?)`
+    );
+
+    await limiter.stop();
+  });
+
+  await test('refresh grants capacity exactly once per interval across instances', async () => {
+    const sharedId = `shared-refresh-${Date.now()}`;
+    const opts = {
+      reservoir: 2,
+      reservoirRefreshInterval: 400,
+      reservoirRefreshAmount: 2,
+    };
+
+    const limiter1 = createLimiter({ id: sharedId, ...opts });
+    await limiter1.ready();
+
+    // Drain the initial reservoir via instance 1
+    await limiter1.schedule(async () => 1);
+    await limiter1.schedule(async () => 2);
+
+    let state = await limiter1.getState();
+    assertEqual(state.reservoir, 0, `Reservoir should be drained, got ${state.reservoir}`);
+
+    // Create instance 2 staggered from instance 1, so under per-process-timer
+    // semantics its refresh clock would fire AFTER instance 1 consumes the
+    // refreshed allowance below — re-granting capacity mid-interval
+    await sleep(150);
+    const limiter2 = createLimiter({ id: sharedId, ...opts, clearOnStart: false });
+    await limiter2.ready();
+
+    // Cross one refresh boundary, then let instance 1 consume the ENTIRE
+    // refreshed allowance
+    await sleep(320);
+    await limiter1.schedule(async () => 3);
+    await limiter1.schedule(async () => 4);
+
+    state = await limiter1.getState();
+    assertEqual(
+      state.reservoir,
+      0,
+      `Expected refreshAmount(2) fully consumed by instance 1, got ${state.reservoir}`
+    );
+
+    // Still within the same interval: instance 2 must NOT be able to acquire.
+    // Under per-process refresh (the pre-fix design) instance 2's own clock
+    // refills the reservoir again here and this job executes.
+    let executed = false;
+    const blocked = limiter2.schedule(async () => {
+      executed = true;
+    });
+    blocked.catch(() => {}); // rejected by stop() below — expected
+
+    await sleep(200);
+
+    assertEqual(
+      executed as boolean,
+      false,
+      'Instance 2 acquired mid-interval — reservoir was refreshed more than once per interval'
+    );
+    state = await limiter2.getState();
+    assertEqual(
+      state.reservoir,
+      0,
+      `Expected reservoir still 0 mid-interval, got ${state.reservoir} (double refresh?)`
+    );
+
+    await Promise.all([limiter1.stop(), limiter2.stop()]);
+  });
+}
+
+async function testSuccessPathReleaseFailure() {
+  console.log('\n🧯 Success-Path Release Failure Tests');
+
+  await test('release failure after success never re-executes the job', async () => {
+    const limiter = createLimiter({ maxConcurrent: 2, retryCount: 3 });
+    await limiter.ready();
+
+    const storage = limiter.getStorage();
+    const originalRelease = storage.releaseSlot.bind(storage);
+    let releaseCalls = 0;
+    (storage as any).releaseSlot = async (
+      limiterId: string,
+      jobId: string,
+      weight: number,
+      success: boolean
+    ) => {
+      releaseCalls++;
+      if (success) {
+        throw new Error('Simulated Redis failure on release');
+      }
+      return originalRelease(limiterId, jobId, weight, success);
+    };
+
+    let fnRuns = 0;
+    let errorEvent: Error | null = null;
+    limiter.on('error', (err) => {
+      errorEvent = err;
+    });
+
+    const result = await limiter.schedule(async () => {
+      fnRuns++;
+      return 'success-result';
+    });
+
+    assertEqual(result, 'success-result', 'Job should resolve with its result');
+    assertEqual(fnRuns, 1, `fn should run exactly once, ran ${fnRuns} times`);
+    assertEqual(releaseCalls, 1, `releaseSlot should be called once, got ${releaseCalls}`);
+    assert(errorEvent !== null, 'Should emit an error event for the release failure');
+    assert(
+      (errorEvent as unknown as Error).message.includes('Simulated Redis failure'),
+      'Error event should carry the release failure'
+    );
+
+    await limiter.stop();
+  });
+}
+
 // Main
 async function main() {
   console.log('╔════════════════════════════════════════════╗');
@@ -480,6 +695,9 @@ async function main() {
   await testPriority();
   await testState();
   await testCancellation();
+  await testStaleJobReaping();
+  await testLazyReservoirRefresh();
+  await testSuccessPathReleaseFailure();
 
   console.log('\n════════════════════════════════════════');
   console.log(`Results: ${passed} passed, ${failed} failed, ${skipped} skipped`);

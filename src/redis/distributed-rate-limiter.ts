@@ -54,6 +54,15 @@ export interface DistributedRateLimiterOptions extends RateLimiterOptions {
   heartbeatInterval?: number;
 
   /**
+   * Jobs running longer than this (ms) are presumed dead — their process
+   * crashed without releasing the slot — and are reaped on the next
+   * heartbeat, reclaiming running/currentWeight. Must exceed your longest
+   * expected job duration.
+   * @default 60000
+   */
+  staleJobTimeout?: number;
+
+  /**
    * Whether to clear state on start (for testing)
    * @default false
    */
@@ -107,12 +116,12 @@ export class DistributedRateLimiter extends TypedEventEmitter {
   private readonly defaultRetryDelay: number | ((attempt: number, error: Error) => number);
   private readonly pollInterval: number;
   private readonly heartbeatInterval: number;
+  private readonly staleJobTimeout: number;
 
-  // Reservoir
+  // Reservoir (refresh happens lazily inside the ACQUIRE_SLOT Lua script)
   private readonly initialReservoir: number | null;
-  private readonly reservoirRefreshInterval: number | null;
+  private readonly reservoirRefreshInterval: number;
   private readonly reservoirRefreshAmount: number;
-  private reservoirRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   // Redis storage
   private readonly storage: RedisStorage;
@@ -145,10 +154,12 @@ export class DistributedRateLimiter extends TypedEventEmitter {
     this.defaultRetryDelay = options.retryDelay ?? 0;
     this.pollInterval = options.pollInterval ?? 50;
     this.heartbeatInterval = options.heartbeatInterval ?? 30000;
+    this.staleJobTimeout = options.staleJobTimeout ?? 60000;
 
-    // Reservoir
+    // Reservoir (0 interval = lazy refresh disabled)
     this.initialReservoir = options.reservoir ?? null;
-    this.reservoirRefreshInterval = options.reservoirRefreshInterval ?? null;
+    this.reservoirRefreshInterval =
+      this.initialReservoir !== null ? (options.reservoirRefreshInterval ?? 0) : 0;
     this.reservoirRefreshAmount = options.reservoirRefreshAmount ?? (options.reservoir ?? 0);
 
     // Create Redis storage
@@ -171,26 +182,18 @@ export class DistributedRateLimiter extends TypedEventEmitter {
 
     await this.storage.initialize(this.id, this.initialReservoir);
 
-    // Start heartbeat
+    // Start heartbeat (extends TTLs and reaps stale jobs from dead processes)
     this.heartbeatTimer = setInterval(async () => {
       try {
-        await this.storage.heartbeat(this.id, this.defaultTimeout ?? 60000);
+        const reaped = await this.storage.heartbeat(this.id, this.staleJobTimeout);
+        if (reaped > 0) {
+          this.emit('reaped', reaped);
+          this.tryProcess();
+        }
       } catch (error) {
         this.emit('error', error as Error);
       }
     }, this.heartbeatInterval);
-
-    // Start reservoir refresh if configured
-    if (this.reservoirRefreshInterval !== null && this.initialReservoir !== null) {
-      this.reservoirRefreshTimer = setInterval(async () => {
-        try {
-          await this.storage.updateReservoir(this.id, this.reservoirRefreshAmount);
-          this.tryProcess();
-        } catch (error) {
-          this.emit('error', error as Error);
-        }
-      }, this.reservoirRefreshInterval);
-    }
   }
 
   /**
@@ -283,12 +286,14 @@ export class DistributedRateLimiter extends TypedEventEmitter {
     if (this.processing || this.paused || this.stopped) return;
     if (this.localQueue.isEmpty) return;
 
-    // Ensure initialized
-    await this.initPromise;
-
+    // Claim the guard synchronously — setting it after an await lets two
+    // callers race into the loop, double-executing one job and dropping another
     this.processing = true;
 
     try {
+      // Ensure initialized
+      await this.initPromise;
+
       while (!this.localQueue.isEmpty && !this.paused && !this.stopped) {
         const job = this.localQueue.peek();
         if (!job) break;
@@ -301,11 +306,26 @@ export class DistributedRateLimiter extends TypedEventEmitter {
           interval: this.interval,
           weight: job.weight,
           jobId: job.id,
+          reservoirRefreshInterval: this.reservoirRefreshInterval,
+          reservoirRefreshAmount: this.reservoirRefreshAmount,
         });
 
         if (result.allowed) {
-          // Remove from local queue and execute
-          this.localQueue.dequeue();
+          // The heap root may have changed during the acquire round-trip (a
+          // higher-priority schedule(), cancel(), or an abort signal firing)
+          // — remove the exact job we acquired a slot for, never dequeue()
+          // the possibly-different current root
+          const removed = this.localQueue.removeById(job.id);
+          if (!removed) {
+            // The peeked job vanished (cancelled/aborted) while we were
+            // acquiring: give the slot back and keep processing
+            await this.storage
+              .releaseSlot(this.id, job.id, job.weight, false)
+              .catch((e) =>
+                this.emit('error', e instanceof Error ? e : new Error(String(e)))
+              );
+            continue;
+          }
           this.executeJob(job);
         } else {
           // Wait and retry
@@ -317,15 +337,29 @@ export class DistributedRateLimiter extends TypedEventEmitter {
           await sleep(waitTime);
         }
       }
+    } catch (error) {
+      // tryProcess is fire-and-forget from schedule()/executeJob()/heartbeat/
+      // resume() — a rejection escaping here would be an unhandled promise
+      // rejection (fatal by default in Node >= 15) and would strand every
+      // queued job. Surface the error and keep polling instead.
+      this.emit('error', error instanceof Error ? error : new Error(String(error)));
+      if (!this.stopped) {
+        setTimeout(() => this.tryProcess(), this.pollInterval);
+      }
     } finally {
       this.processing = false;
     }
 
-    // Check if idle
-    if (this.localQueue.isEmpty) {
-      const state = await this.storage.getState(this.id);
-      if (state.running === 0) {
-        this.emit('idle', undefined);
+    // Check if idle (skip when stopped — the connection may already be
+    // closed; tryProcess is fire-and-forget so a rejection here is unhandled)
+    if (this.localQueue.isEmpty && !this.stopped) {
+      try {
+        const state = await this.storage.getState(this.id);
+        if (state.running === 0) {
+          this.emit('idle', undefined);
+        }
+      } catch (error) {
+        this.emit('error', error as Error);
       }
     }
   }
@@ -345,6 +379,9 @@ export class DistributedRateLimiter extends TypedEventEmitter {
     const waitTime = job.startedAt - job.queuedAt;
     const startTime = Date.now();
 
+    // Step 1: run the job function; capture the outcome without releasing yet
+    let result: unknown;
+    let fnError: Error | null = null;
     try {
       // Check if aborted
       if (job.signal?.aborted) {
@@ -352,13 +389,25 @@ export class DistributedRateLimiter extends TypedEventEmitter {
       }
 
       // Execute with optional timeout
-      let result: unknown;
       if (job.timeout !== null) {
         result = await Promise.race([job.fn(), createTimeout(job.timeout, job.id)]);
       } else {
         result = await job.fn();
       }
+    } catch (error) {
+      fnError = error instanceof Error ? error : new Error(String(error));
+    }
 
+    // Step 2: release the slot (best-effort; a release failure must never
+    // retry or reject a job whose fn already succeeded)
+    try {
+      await this.storage.releaseSlot(this.id, job.id, job.weight, fnError === null);
+    } catch (releaseErr) {
+      this.emit('error', releaseErr instanceof Error ? releaseErr : new Error(String(releaseErr)));
+    }
+
+    // Step 3: settle the job
+    if (fnError === null) {
       const duration = Date.now() - startTime;
 
       // Update local stats
@@ -366,20 +415,10 @@ export class DistributedRateLimiter extends TypedEventEmitter {
       this.totalExecutionTime += duration;
       this.localDone++;
 
-      // Release slot in Redis
-      await this.storage.releaseSlot(this.id, job.id, job.weight, true);
-
       this.emit('done', { job, result, duration });
       job.resolve(result);
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-
-      // Release slot in Redis (best-effort; don't leave job promise hanging if Redis fails)
-      try {
-        await this.storage.releaseSlot(this.id, job.id, job.weight, false);
-      } catch (releaseErr) {
-        this.emit('error', releaseErr instanceof Error ? releaseErr : new Error(String(releaseErr)));
-      }
+    } else {
+      const err = fnError;
 
       // Check for retry
       if (job.retryAttempt < job.retryCount) {
@@ -439,11 +478,6 @@ export class DistributedRateLimiter extends TypedEventEmitter {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
-    }
-
-    if (this.reservoirRefreshTimer) {
-      clearInterval(this.reservoirRefreshTimer);
-      this.reservoirRefreshTimer = null;
     }
 
     // Reject all local queued jobs

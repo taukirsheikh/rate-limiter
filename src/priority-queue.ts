@@ -6,6 +6,7 @@ import type { Job } from './types.js';
  */
 export class PriorityQueue<T extends Job = Job> {
   private heap: T[] = [];
+  private seqCounter = 0;
 
   /**
    * Number of items in the queue
@@ -25,6 +26,7 @@ export class PriorityQueue<T extends Job = Job> {
    * Add an item to the queue
    */
   enqueue(item: T): number {
+    item.seq = this.seqCounter++;
     this.heap.push(item);
     this.bubbleUp(this.heap.length - 1);
     return this.heap.length;
@@ -112,7 +114,12 @@ export class PriorityQueue<T extends Job = Job> {
       return a.priority - b.priority;
     }
     // Then by queue time (FIFO within same priority)
-    return a.queuedAt - b.queuedAt;
+    if (a.queuedAt !== b.queuedAt) {
+      return a.queuedAt - b.queuedAt;
+    }
+    // Date.now() has ms resolution, so same-tick enqueues tie — break by
+    // insertion order for a strict total order (heap ties are not FIFO)
+    return (a.seq ?? 0) - (b.seq ?? 0);
   }
 
   /**
