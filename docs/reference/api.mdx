@@ -27,7 +27,7 @@ description: Main methods and options at a glance.
 | `updateReservoir(value)` / `incrementReservoir(amount)` | Change reservoir |
 | `isIdle()` | True if nothing queued and nothing running |
 
-**Events:** `queued`, `executing`, `done`, `failed`, `retry`, `dropped`, `depleted`, `idle`, `error`.
+**Events:** `queued`, `executing`, `done`, `failed`, `retry`, `dropped`, `depleted`, `idle`, `error`, `reaped` (distributed only — count of stale jobs reclaimed from dead processes).
 
 ---
 
@@ -37,7 +37,9 @@ Same options as RateLimiter, plus:
 
 **Required:** `redis` — `{ url }` or `{ host, port }` or `{ client }`, and optional `keyPrefix`, `password`, `db`, etc.
 
-**Extra options:** `pollInterval` (default 50), `heartbeatInterval` (default 30000), `clearOnStart` (default false, useful in tests), `readyTimeout` (default `Infinity` — wait until Redis connects; set a number to fail after that many ms).
+**Extra options:** `pollInterval` (default 50), `heartbeatInterval` (default 30000), `staleJobTimeout` (default 60000 — jobs running longer are presumed dead and their slots reclaimed on heartbeat; must exceed your longest expected job duration), `clearOnStart` (default false, useful in tests), `readyTimeout` (default `Infinity` — wait until Redis connects; set a number to fail after that many ms).
+
+**Note:** in the distributed limiter, `reservoirRefreshInterval` refreshes lazily inside the atomic acquire script (exactly once per interval across all processes, not once per process). A fully idle system does not refresh until the next job tries to acquire.
 
 **Methods:** Same as RateLimiter, plus:
 

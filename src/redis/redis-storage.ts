@@ -17,7 +17,7 @@ export interface AcquireResult {
   allowed: boolean;
   running: number;
   waitTime: number;
-  reason: 'ok' | 'concurrency' | 'reservoir' | 'interval' | 'minTime';
+  reason: 'ok' | 'concurrency' | 'reservoir' | 'interval' | 'minTime' | 'duplicate';
 }
 
 /**
@@ -185,7 +185,7 @@ export class RedisStorage {
 
     // Initialize state
     const key = this.getKey(limiterId);
-    await this.execScript('initState', 1, key, reservoir ?? -1);
+    await this.execScript('initState', 1, key, reservoir ?? -1, Date.now());
 
     this.initialized = true;
   }
@@ -209,6 +209,10 @@ export class RedisStorage {
       interval: number;
       weight: number;
       jobId: string;
+      /** Lazy reservoir refresh interval in ms (0 = disabled) */
+      reservoirRefreshInterval?: number;
+      /** Value the reservoir is reset to on refresh */
+      reservoirRefreshAmount?: number;
     }
   ): Promise<AcquireResult> {
     const key = this.getKey(limiterId);
@@ -224,7 +228,9 @@ export class RedisStorage {
       options.interval,
       now,
       options.weight,
-      options.jobId
+      options.jobId,
+      options.reservoirRefreshInterval ?? 0,
+      options.reservoirRefreshAmount ?? 0
     ) as [number, number, number, string];
 
     return {
@@ -319,19 +325,23 @@ export class RedisStorage {
   }
 
   /**
-   * Send heartbeat to keep state alive
+   * Send heartbeat to keep state alive and reap stale jobs.
+   * Jobs started more than `staleJobTimeout` ms ago are presumed dead and
+   * their slots reclaimed. Returns the number of jobs reaped.
    */
-  async heartbeat(limiterId: string, timeout: number): Promise<number> {
+  async heartbeat(limiterId: string, staleJobTimeout: number): Promise<number> {
     const key = this.getKey(limiterId);
     const now = Date.now();
 
-    return await this.execScript(
+    const reaped = await this.execScript(
       'heartbeat',
       1,
       key,
       now,
-      timeout
-    ) as number;
+      staleJobTimeout
+    );
+
+    return Number(reaped);
   }
 
   /**
